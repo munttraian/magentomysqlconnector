@@ -2,23 +2,17 @@ delimiter //
 DROP FUNCTION IF EXISTS getMagentoField //
 CREATE FUNCTION getMagentoField ( bizField VARCHAR(255) ) RETURNS VARCHAR(255)
 BEGIN
-	CASE bizField
-		WHEN 'cat_name_uk' THEN RETURN 'name';
-        WHEN 'is_active_uk' THEN RETURN 'is_active';
-        ELSE RETURN '';
-	END CASE;
+	SET @fieldMagento = (SELECT magentofield_id_magento FROM magento_field_matches WHERE field_id_biz_cloud = bizField);
+    
+    RETURN @fieldMagento;
 END //
 
 DROP FUNCTION IF EXISTS getMagentoFieldStore //
 CREATE FUNCTION getMagentoFieldStore ( bizField VARCHAR(255) ) RETURNS VARCHAR(255)
 BEGIN
-	RETURN 0;
-
-	CASE bizField
-		WHEN 'cat_name_uk' THEN RETURN 'uk';
-        WHEN 'is_active_uk' THEN RETURN 'uk';
-        ELSE RETURN 0;
-	END CASE;
+	SET @fieldMagentoStore = (SELECT IF(INSTR(magentofield_id_magento,'|'), SUBSTRING_INDEX(magentofield_id_magento,'|',-1), 0) FROM magento_field_matches WHERE field_id_biz_cloud = bizField);
+    
+    RETURN @fieldMagentoStore;
 END //
 
 
