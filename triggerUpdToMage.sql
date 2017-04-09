@@ -127,7 +127,7 @@ outer_block:BEGIN
             
             -- get basic category data
 			SET @entity_id = IF(@categoryid=0,NULL,@categoryid);
-			SET @entity_type_id = 3;
+			SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'catalog_product');
 			SET @attribute_set_id = 3;
 			SET @path = CONCAT('1/2/', @categoryid);
 			SET @parent_id = 2;
@@ -164,8 +164,8 @@ outer_block:BEGIN
                 SET NEW.message = CONCAT(fieldName, ' ', fieldValue);
                 
                 -- get attribute id
-				SET @attributeId = (SELECT IFNULL(attribute_id,0) FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = 3);
-				SET @backendType = (SELECT backend_type FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = 3);
+				SET @attributeId = (SELECT IFNULL(attribute_id,0) FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = @entity_type_id);
+				SET @backendType = (SELECT backend_type FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = @entity_type_id);
 				SET @attributeTable = CONCAT('catalog_category_entity_',@backendType);
                 SET @magentoFieldStore = getMagentoFieldStore(fieldName);
                 
@@ -246,7 +246,9 @@ outer_block:BEGIN
 			SET @product_id = (SELECT entity_id FROM catalog_product_entity WHERE sku = @sku);
 			SET @productCategoryIds  = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_category_ids' );
             SET @productWebsiteIds  = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_website_ids' );
-            
+			SET @attribute_set_id = (SELECT field_value FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_attribute_set_id');
+			SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'catalog_product');
+        
             -- check if action set
 			IF @action = '' THEN
 				SET NEW.message = 'Action field not set';
@@ -269,8 +271,12 @@ outer_block:BEGIN
             
             -- get basic product data
 			SET @entity_id = IF(@product_id=0,NULL,@product_id);
-			SET @entity_type_id = 4;
-			SET @attribute_set_id = 4;
+			-- SET @entity_type_id = 4;
+
+			-- if no attribute set id -> get default
+            IF @attribute_set_id IS NULL THEN
+				SET @attribute_set_id = (SELECT attribute_set_id FROM eav_attribute_set WHERE entity_type_id = @entity_type_id AND attribute_set_name = 'Default');
+            END IF;
 			
             -- treat delete action
             IF @action = 2 THEN
@@ -304,8 +310,8 @@ outer_block:BEGIN
 				END IF;
                 
                 -- get attribute id
-				SET @attributeId = (SELECT IFNULL(attribute_id,0) FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = 4);
-				SET @backendType = (SELECT backend_type FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = 4);
+				SET @attributeId = (SELECT IFNULL(attribute_id,0) FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = @entity_type_id);
+				SET @backendType = (SELECT backend_type FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = @entity_type_id);
 				SET @attributeTable = CONCAT('catalog_product_entity_',@backendType);
                 SET @magentoFieldStore = getMagentoFieldStore(fieldName);
                 
