@@ -4,7 +4,9 @@ DROP FUNCTION IF EXISTS getMagentoField //
 CREATE FUNCTION getMagentoField ( bizField VARCHAR(255) ) RETURNS VARCHAR(255)
 BEGIN
 	-- SET @fieldMagento = (SELECT magento_field_name FROM magento_field_matches WHERE cloud_biz_field_name = bizField);
-    SET @fieldMagento = (SELECT IF(INSTR(magento_field_name,'|'), SUBSTRING_INDEX(magento_field_name,'|', 1), magento_field_name) FROM magento_field_matches WHERE cloud_biz_field_name = bizField);
+    -- SET @fieldMagento = (SELECT IF(INSTR(magento_field_name,'|'), SUBSTRING_INDEX(magento_field_name,'|', 1), magento_field_name) FROM magento_field_matches WHERE cloud_biz_field_name = bizField);
+
+	SET @fieldMagento = (SELECT IF(INSTR(bizField,'|'), SUBSTRING_INDEX(bizField,'|', 1), bizField));
     
     RETURN @fieldMagento;
 END //
@@ -14,7 +16,9 @@ DROP FUNCTION IF EXISTS getMagentoFieldStore //
 CREATE FUNCTION getMagentoFieldStore ( bizField VARCHAR(255) ) RETURNS VARCHAR(255)
 BEGIN
 	-- SET @fieldMagentoStore = (SELECT IF(INSTR(magentofield_id_magento,'|'), SUBSTRING_INDEX(magentofield_id_magento,'|',-1), 0) FROM magento_field_matches WHERE field_id_biz_cloud = bizField);
-    SET @fieldMagentoStore = (SELECT magento_store_id FROM magento_field_matches WHERE cloud_biz_field_name = bizField);
+    -- SET @fieldMagentoStore = (SELECT magento_store_id FROM magento_field_matches WHERE cloud_biz_field_name = bizField);
+    
+    SET @fieldMagentoStore = (SELECT IF(INSTR(bizField,'|'), SUBSTRING_INDEX(bizField,'|',-1), 0));
     
     RETURN @fieldMagentoStore;
 END //
@@ -127,10 +131,10 @@ outer_block:BEGIN
             
             -- get basic category data
 			SET @entity_id = IF(@categoryid=0,NULL,@categoryid);
-			SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'catalog_product');
+			SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'catalog_category');
 			SET @attribute_set_id = 3;
-			SET @path = CONCAT('1/2/', @categoryid);
-			SET @parent_id = 2;
+			SET @path = CONCAT('1/', @categoryid);
+			SET @parent_id = 1;
 			
             -- treat delete action
             IF @action = 2 THEN
@@ -140,13 +144,14 @@ outer_block:BEGIN
             END IF;
             
             -- treat create/update action
-			INSERT INTO catalog_category_entity (`entity_id`,`entity_type_id`, `attribute_set_id`, `path`, `parent_id`)
-			VALUES (@entity_id, @entity_type_id, @attribute_set_id, @path, @parent_id)
-			ON DUPLICATE KEY UPDATE `path` = VALUES(`path`);
-			
+			INSERT IGNORE INTO catalog_category_entity (`entity_id`,`entity_type_id`, `attribute_set_id`) -- , `path`, `parent_id`)
+			VALUES (@entity_id, @entity_type_id, @attribute_set_id); -- , @path, @parent_id)
+			-- ON DUPLICATE KEY UPDATE `path` = VALUES(`path`);
+		
+            
             -- if new category id update category id
 			IF @categoryid = 0 THEN 
-				SET @categoryid = LAST_INSERT_ID(); 
+                SET @categoryid = LAST_INSERT_ID(); 
                 SET NEW.identifier = @categoryid;
 			END IF;
 			
@@ -221,12 +226,12 @@ outer_block:BEGIN
 			END LOOP;
             
             -- update path based on parent id
-            SET @parent_id = (SELECT parent_id FROM catalog_product_entity WHERE entity_id = @category_id);
-            SET @parent_path = (SELECT path FROM catalog_product_entity WHERE entity_id = @parent_id);
+            -- SET @parent_id = (SELECT parent_id FROM catalog_category_entity WHERE entity_id = @category_id);
+            -- SET @parent_path = (SELECT path FROM catalog_category_entity WHERE entity_id = @parent_id);
             
-            UPDATE catalog_category_entity
-               SET path = CONCAT(@parent_path,'/',@category_id)
-             WHERE entity_id = @category_id;  
+            -- UPDATE catalog_category_entity
+            --    SET path = CONCAT(@parent_path,'/',@category_id)
+             -- WHERE entity_id = @category_id;  
 			
 			CLOSE c_categoryData;			
 			
@@ -245,8 +250,15 @@ outer_block:BEGIN
 			SET @type_id = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_type_id' );
 			SET @product_id = (SELECT entity_id FROM catalog_product_entity WHERE sku = @sku);
 			SET @productCategoryIds  = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_category_ids' );
-            SET @productWebsiteIds  = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_website_ids' );
-			SET @attribute_set_id = (SELECT field_value FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_attribute_set_id');
+            -- SET @productWebsiteIds  = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_website_ids' );
+			SET @productWebsiteIds  = (SELECT group_concat(s.website_id SEPARATOR ',') 
+										 FROM to_magento_datas tmd,
+											  core_store s
+                                        WHERE tmd.record_id = NEW.record_id 
+                                          AND tmd.field_name LIKE 'sku|%' 
+                                          AND IF(INSTR(tmd.field_name,'|'), SUBSTRING_INDEX(tmd.field_name,'|',-1), 0) = s.store_id
+										);
+            SET @attribute_set_id = (SELECT field_value FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_attribute_set_id');
 			SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'catalog_product');
         
             -- check if action set
@@ -285,8 +297,9 @@ outer_block:BEGIN
                 LEAVE outer_block;
             END IF; 
             
+            
             -- if new product update product id
-			IF @product_id IS NULL THEN 
+			IF !@product_id OR @product_id IS NULL OR @product_id = '' THEN 
 				-- treat create/update action
 				INSERT INTO catalog_product_entity (`entity_id`,`entity_type_id`, `attribute_set_id`, `type_id`, `sku`, `has_options`, `required_options`, `created_at`, `updated_at`)
 				VALUES (NULL, @entity_type_id, @attribute_set_id, @type_id, @sku, 0, 0, now(), now())
