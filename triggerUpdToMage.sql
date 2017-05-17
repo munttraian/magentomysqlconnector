@@ -249,7 +249,7 @@ outer_block:BEGIN
 			SET @action = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'action' );
 			SET @type_id = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_type_id' );
 			SET @product_id = (SELECT entity_id FROM catalog_product_entity WHERE sku = @sku);
-			SET @productCategoryIds  = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_category_ids' );
+			SET @productCategoryIds  = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'categories_ids' );
             -- SET @productWebsiteIds  = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_website_ids' );
 			SET @productWebsiteIds  = (SELECT group_concat(s.website_id SEPARATOR ',') 
 										 FROM to_magento_datas tmd,
@@ -258,7 +258,7 @@ outer_block:BEGIN
                                           AND tmd.field_name LIKE 'sku|%' 
                                           AND IF(INSTR(tmd.field_name,'|'), SUBSTRING_INDEX(tmd.field_name,'|',-1), 0) = s.store_id
 										);
-            SET @attribute_set_id = (SELECT field_value FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_attribute_set_id');
+            SET @attribute_set_id = (SELECT field_value FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'attributesetid');
 			SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'catalog_product');
         
             -- check if action set
@@ -277,7 +277,7 @@ outer_block:BEGIN
             
             -- check if type_id set
             -- if not assume type_id = simple
-            IF @type_id = '' THEN
+            IF @type_id = '' OR @type_id IS NULL THEN
 				SET @type_id = 'simple';
             END IF;
             
@@ -311,6 +311,24 @@ outer_block:BEGIN
                 -- SET NEW.identifier = @product_id;
 			END IF;
             
+            -- ADD DEFAULT DATA for visibility and status
+            -- visiblity
+            SET @visibilityExists = 0;
+            SELECT 1 INTO @visibilityExists FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name LIKE 'visibility%' LIMIT 1;
+            
+            IF @visibilityExists = 0 THEN
+				INSERT INTO to_magento_datas (record_id, field_name, field_value) VALUES (NEW.record_id, 'visibility|0', 4);
+            END IF;
+            
+            -- status
+            SET @statusExists = 0;
+            SELECT 1 INTO @statusExists FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name LIKE 'status%' LIMIT 1;
+            
+            IF @statusExists = 0 THEN
+				INSERT INTO to_magento_datas (record_id, field_name, field_value) VALUES (NEW.record_id, 'status|0', 2);
+            END IF;
+            
+            -- START IMPORT PRODUCT DATA
             -- get product data
 			OPEN c_productData;
             
@@ -411,16 +429,21 @@ outer_block:BEGIN
             END LOOP; -- end loop product datas
             
             -- add products to category
+			DELETE FROM catalog_category_product WHERE product_id = @product_id;
+                        
 			INSERT IGNORE INTO catalog_category_product (category_id, product_id)
 			SELECT c.entity_id, @product_id
 			  FROM catalog_category_entity c
 			 WHERE FIND_IN_SET(c.entity_id, @productCategoryIds); 
              
             -- add products to website
-			INSERT IGNORE INTO catalog_product_website (product_id, website_id)
+			DELETE FROM catalog_product_website WHERE product_id = @product_id;
+            
+            INSERT IGNORE INTO catalog_product_website (product_id, website_id)
 			SELECT @product_id, w.website_id
 			  FROM core_website w
 			 WHERE FIND_IN_SET(w.website_id, @productWebsiteIds); 
+            
             
             -- add stock line
             CALL addStockLine(@product_id, @productWebsiteIds);
