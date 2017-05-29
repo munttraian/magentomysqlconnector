@@ -103,17 +103,7 @@ DROP TRIGGER IF EXISTS triggerUpdToMage //
 CREATE TRIGGER triggerUpdToMage BEFORE UPDATE ON to_magento_records
 FOR EACH ROW
 outer_block:BEGIN
-	DECLARE done INT DEFAULT 0;
-	DECLARE fieldName VARCHAR(255);
-    DECLARE fieldValue TEXT;
-    DECLARE indImage INT DEFAULT 0;
-    DECLARE imageName VARCHAR(255);
-    
-	DECLARE c_categoryData CURSOR FOR SELECT field_name, field_value FROM to_magento_datas WHERE record_id = NEW.record_id;
-    DECLARE c_productData CURSOR FOR SELECT BINARY field_name, BINARY field_value FROM to_magento_datas WHERE record_id = NEW.record_id;
-    
-    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
-    
+	
     SET NAMES 'utf8' COLLATE 'utf8_unicode_ci';
 
 	IF NEW.status = 1 THEN
@@ -160,76 +150,92 @@ outer_block:BEGIN
                 SET @categoryid = LAST_INSERT_ID(); 
                 SET NEW.identifier = @categoryid;
 			END IF;
+            
+            -- update boolean values like Yes/No Ja/Nein
+            UPDATE to_magento_datas
+               SET field_value = 1
+             WHERE record_id = NEW.record_id
+               AND field_value IN ('Yes','Ja');
 			
-			-- get category data
-			OPEN c_categoryData;
-			
-            -- foreach each field line
-			read_loop: LOOP
-				FETCH c_categoryData INTO fieldName, fieldValue;
-				
-				IF done THEN
-					LEAVE read_loop;
-				END IF;	
-                
-                SET NEW.message = CONCAT(fieldName, ' ', fieldValue);
-                
-                -- get attribute id
-				SET @attributeId = (SELECT IFNULL(attribute_id,0) FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = @entity_type_id);
-				SET @backendType = (SELECT backend_type collate utf8_general_ci FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = @entity_type_id);
-				SET @attributeTable = CONCAT('catalog_category_entity_',@backendType);
-                SET @magentoFieldStore = getMagentoFieldStore(fieldName);
-                
-                -- CALL logMessage( CONCAT('Attribute id ', @attributeId, ' Backend Type ', @backendType, ' Attribute table ', @attributeTable, ' Magento store id', @magentoFieldStore) );
-                CALL logMessage(CONCAT('Treat ', getMagentoField(fieldName)));
-                CALL logMessage(@attributeId);
-                -- CALL logMessage(@backendType);
-                -- CALL logMessage(@attributeTable);
-                
-                -- if not an attribute then go next field
-                IF @attributeId = 0 THEN
-					ITERATE read_loop;
-                END IF;
-                
-                SET NEW.message = CONCAT('update ',fieldName);
-                
-                CASE @backendType
-					WHEN 'varchar' THEN
-						BEGIN
-							INSERT INTO catalog_category_entity_varchar (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @categoryid, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;
-                    WHEN 'int' THEN
-						BEGIN
-							INSERT INTO catalog_category_entity_int (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @categoryid, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;
-                    WHEN 'decimal' THEN
-						BEGIN
-							INSERT INTO catalog_category_entity_decimal (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @categoryid, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;
-                    WHEN 'datetime' THEN
-						BEGIN
-							INSERT INTO catalog_category_entity_datetime (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @categoryid, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;
-                    WHEN 'text' THEN
-						BEGIN
-							INSERT INTO catalog_category_entity_text (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @categoryid, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;    
-					ELSE
-						BEGIN
-                        END;
-                END CASE;    
-                
-			END LOOP;
+            UPDATE to_magento_datas
+               SET field_value = 0
+             WHERE record_id = NEW.record_id
+               AND field_value IN ('No','Nein');
+            
+			-- varchar
+            INSERT INTO catalog_category_entity_varchar (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @category_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'varchar'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- int
+            INSERT INTO catalog_category_entity_int (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @category_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'int'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- decimal
+            INSERT INTO catalog_category_entity_decimal (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @category_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'decimal'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- text
+            INSERT INTO catalog_category_entity_text (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @category_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'text'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+               
+            -- datetime
+            INSERT INTO catalog_category_entity_text (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @category_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'datetime'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);   
             
             -- update path based on parent id
             -- SET @parent_id = (SELECT parent_id FROM catalog_category_entity WHERE entity_id = @category_id);
@@ -238,9 +244,7 @@ outer_block:BEGIN
             -- UPDATE catalog_category_entity
             --    SET path = CONCAT(@parent_path,'/',@category_id)
              -- WHERE entity_id = @category_id;  
-			
-			CLOSE c_categoryData;			
-			
+						
 		END IF;
 		
         
@@ -337,117 +341,91 @@ outer_block:BEGIN
             
             SET NEW.message = 'START PRODUCT IMPORT';
             
-            -- START IMPORT PRODUCT DATA
-            -- get product data
-			OPEN c_productData;
+            -- update boolean values like Yes/No Ja/Nein
+            UPDATE to_magento_datas
+               SET field_value = 1
+             WHERE record_id = NEW.record_id
+               AND field_value IN ('Yes','Ja');
+			
+            UPDATE to_magento_datas
+               SET field_value = 0
+             WHERE record_id = NEW.record_id
+               AND field_value IN ('No','Nein');
             
-            -- foreach each field line
-			read_loop_prod: LOOP
+            -- varchar
+            INSERT INTO catalog_product_entity_varchar (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @product_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'varchar'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
             
-				-- SELECT 0 INTO done FROM dual;
+            -- int
+            INSERT INTO catalog_product_entity_int (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @product_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'int'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
             
-				FETCH c_productData INTO fieldName, fieldValue;
-				
-                SET NEW.message = CONCAT('Attribute ', fieldName, ' ', fieldValue);
-                
-				IF done AND fieldName IS NULL  THEN
-				 	SET NEW.message = CONCAT('DONE ', fieldName, ' ', done);
-                
-                    LEAVE read_loop_prod;
-				END IF;
-                
-                SET NEW.message = 'STEP 1 Attribute ';
-                
-                -- get attribute id
-				SET @attributeId = (SELECT IFNULL(attribute_id,0) FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = @entity_type_id);
-				SET @backendType = (SELECT backend_type FROM eav_attribute WHERE attribute_code = getMagentoField(fieldName) AND entity_type_id = @entity_type_id);
-				SET @attributeTable = CONCAT('catalog_product_entity_',@backendType);
-                SET @magentoFieldStore = getMagentoFieldStore(fieldName);
-                
-                SET NEW.message = CONCAT('STEP 2 Attribute ', fieldName);
-                
-                -- if not an attribute then go next field
-                IF @attributeId = 0 THEN
-					SET NEW.message = CONCAT('Attribute ', fieldName, ' not found');
-					ITERATE read_loop_prod;
-                END IF;
-                
-				-- if media gallery, custom treat
-                IF getMagentoField(fieldName) = 'media_gallery' collate utf8_general_ci THEN
-					
-					-- split image text
-                    SET @v_image_count = countOccurence( fieldValue, ',' );
-                    SET indImage = 0;
-                    
-                    image_loop: LOOP
-						
-                        SET indImage = indImage + 1;
-                        
-                        -- exit when all images are treated
-                        IF indIMage > (@v_image_count + 1) THEN 
-							LEAVE image_loop;
-                        END IF;
-                        
-                        -- get image name
-                        SET imageName = getSetElementByIndex( fieldValue, indImage );
-                        
-                        -- insert into media gallery
-                        INSERT IGNORE INTO catalog_product_entity_media_gallery (attribute_id, entity_id, value)
-                        VALUES (@attribute_id, @product_id, imageName);
-                        
-                        -- insert into media catalog_product_entity_media_gallery_value
-                        INSERT INTO catalog_product_entity_media_gallery_value (value_id, store_id, `position`)
-                        SELECT m.value_id, @magentoFieldStore,  indImage
-						  FROM catalog_product_entity_media_gallery m
-						 WHERE m.entity_id = @product_id
-						   AND m.value = imageName
-						   ON DUPLICATE KEY UPDATE `position` = indImage;
-                        
-                    END LOOP; -- image_loop
-                    
-                
-					ITERATE read_loop_prod; -- continue with next attribute/datas
-                END IF;
-                
-                SET NEW.message = CONCAT('update ',fieldName);
-                
-                CASE @backendType
-					WHEN 'varchar' THEN
-						BEGIN
-							INSERT INTO catalog_product_entity_varchar (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @product_id, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;
-                    WHEN 'int' THEN
-						BEGIN
-							INSERT INTO catalog_product_entity_int (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @product_id, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;
-                    WHEN 'decimal' THEN
-						BEGIN
-							INSERT INTO catalog_product_entity_decimal (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @product_id, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;
-                    WHEN 'datetime' THEN
-						BEGIN
-							INSERT INTO catalog_product_entity_datetime (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @product_id, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;
-                    WHEN 'text' THEN
-						BEGIN
-							INSERT INTO catalog_product_entity_text (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
-							VALUES (@entity_type_id, @attributeId, @magentoFieldStore, @product_id, fieldValue)
-							ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
-                        END;    
-					ELSE
-						BEGIN
-                        END;
-                END CASE;                
-                
-            END LOOP; -- end loop product datas
+            -- decimal
+            INSERT INTO catalog_product_entity_decimal (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @product_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'decimal'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- text
+            INSERT INTO catalog_product_entity_text (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @product_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'text'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+               
+            -- datetime
+            INSERT INTO catalog_product_entity_text (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|',-1), 0) as store_id, 
+                    @product_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'datetime'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);   
             
             -- add products to category
 			DELETE FROM catalog_category_product WHERE product_id = @product_id;
@@ -474,6 +452,8 @@ outer_block:BEGIN
 				SET @simpleProducts = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'prod_simple_sku' );
 				
 			END IF;
+            
+            SET NEW.message = 'END PRODUCT IMPORT';
             
 		END IF;
 		

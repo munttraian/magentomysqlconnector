@@ -1,3 +1,4 @@
+DROP TABLE `to_magento_records`;
 CREATE TABLE `to_magento_records` (
   `id` bigint(32) NOT NULL AUTO_INCREMENT,
   `record_id` bigint(32) DEFAULT NULL,
@@ -7,14 +8,14 @@ CREATE TABLE `to_magento_records` (
   `status` tinyint(4) DEFAULT '0',
   `created` datetime DEFAULT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=latin1;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8; -- COLLATE=utf8_general_ci;
 
-
+DROP TABLE `to_magento_datas`;
 CREATE TABLE `to_magento_datas` (
   `id` bigint(32) NOT NULL AUTO_INCREMENT,
   `record_id` bigint(32) DEFAULT NULL,
   `field_name` varchar(255) DEFAULT NULL,
   `field_value` text,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8; -- COLLATE=utf8_general_ci;
 
