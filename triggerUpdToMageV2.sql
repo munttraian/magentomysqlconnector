@@ -352,6 +352,11 @@ outer_block:BEGIN
              WHERE record_id = NEW.record_id
                AND field_value IN ('No','Nein');
             
+            UPDATE to_magento_datas
+               SET field_name = REPLACE(field_name,'designid','custom_design')
+             WHERE record_id = NEW.record_id
+               AND field_name LIKE 'designid%';
+            
             -- varchar
             INSERT INTO catalog_product_entity_varchar (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
             SELECT @entity_type_id as entity_type_id, 
