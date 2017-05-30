@@ -339,6 +339,15 @@ outer_block:BEGIN
 				INSERT INTO to_magento_datas (record_id, field_name, field_value) VALUES (NEW.record_id, 'status|0', 2);
             END IF;
             
+            -- tax_class_id
+            SET @taxClassIdExists = 0;
+            SELECT 1 INTO @taxClassIdExists FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name LIKE 'tax_class_id|0' LIMIT 1;
+            
+            IF @taxClassIdExists = 0 THEN
+				INSERT INTO to_magento_datas (record_id, field_name, field_value) VALUES (NEW.record_id, 'tax_class_id|0', 2);
+            END IF;
+            
+            
             SET NEW.message = 'START PRODUCT IMPORT';
             
             -- update boolean values like Yes/No Ja/Nein
