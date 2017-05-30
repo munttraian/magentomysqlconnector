@@ -1,7 +1,7 @@
 delimiter //
 -- get magento attribute code based on bizcloud fieldname
 DROP FUNCTION IF EXISTS getMagentoField //
-CREATE FUNCTION getMagentoField ( bizField VARCHAR(255) ) RETURNS VARCHAR(255) not deterministic
+CREATE FUNCTION getMagentoField ( bizField VARCHAR(255) ) RETURNS VARCHAR(255) deterministic
 BEGIN
 	-- SET @fieldMagento = (SELECT magento_field_name FROM magento_field_matches WHERE cloud_biz_field_name = bizField);
     -- SET @fieldMagento = (SELECT IF(INSTR(magento_field_name,'|'), SUBSTRING_INDEX(magento_field_name,'|', 1), magento_field_name) FROM magento_field_matches WHERE cloud_biz_field_name = bizField);
@@ -13,7 +13,7 @@ END //
 
 -- get magento store id
 DROP FUNCTION IF EXISTS getMagentoFieldStore //
-CREATE FUNCTION getMagentoFieldStore ( bizField VARCHAR(255) ) RETURNS VARCHAR(255) not deterministic
+CREATE FUNCTION getMagentoFieldStore ( bizField VARCHAR(255) ) RETURNS VARCHAR(255) deterministic
 BEGIN
 	-- SET @fieldMagentoStore = (SELECT IF(INSTR(magentofield_id_magento,'|'), SUBSTRING_INDEX(magentofield_id_magento,'|',-1), 0) FROM magento_field_matches WHERE field_id_biz_cloud = bizField);
     -- SET @fieldMagentoStore = (SELECT magento_store_id FROM magento_field_matches WHERE cloud_biz_field_name = bizField);
@@ -57,7 +57,7 @@ END //
 
 -- count charcter occurence in text
 DROP FUNCTION IF EXISTS countOccurence //
-CREATE FUNCTION countOccurence ( p_text TEXT, p_needle VARCHAR(255) ) RETURNS int not deterministic
+CREATE FUNCTION countOccurence ( p_text TEXT, p_needle VARCHAR(255) ) RETURNS int deterministic
 BEGIN
 	DECLARE noOccur INT;
     
@@ -74,7 +74,7 @@ END //
 
 -- get element by index from a set like 'a,b,cc,ddf,eee'
 DROP FUNCTION IF EXISTS getSetElementByIndex //
-CREATE FUNCTION getSetElementByIndex ( p_settext TEXT, p_ind INT) RETURNS varchar(255) not deterministic
+CREATE FUNCTION getSetElementByIndex ( p_settext TEXT, p_ind INT) RETURNS varchar(255) deterministic
 BEGIN
 	DECLARE v_element VARCHAR(255);
     
@@ -356,6 +356,21 @@ outer_block:BEGIN
                SET field_name = REPLACE(field_name,'designid','custom_design')
              WHERE record_id = NEW.record_id
                AND field_name LIKE 'designid%';
+            
+            -- update brand value with option_id from magento
+            UPDATE to_magento_datas tmd
+               SET field_value = (SELECT MIN(eov.option_id) 
+									FROM eav_attribute e
+                                    JOIN eav_attribute_option eo ON e.attribute_id = eo.attribute_id 
+									JOIN eav_attribute_option_value eov ON eov.option_id = eo.option_id
+								   WHERE e.attribute_code = 'brand'
+                                     AND e.entity_type_id = @entity_type_id
+                                     AND eov.value = tmd.field_value
+                                     AND eov.store_id = 0
+                                 )
+             WHERE record_id = NEW.record_id
+               AND field_name LIKE 'brand|%'
+               AND concat('',field_value * 1) != field_value;
             
             -- varchar
             INSERT INTO catalog_product_entity_varchar (`entity_type_id`, `attribute_id`, `store_id`, `entity_id`, `value`)
