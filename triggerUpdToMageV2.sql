@@ -320,6 +320,10 @@ outer_block:BEGIN
                 
                 SET @entity_id = @product_id;
                 -- SET NEW.identifier = @product_id;
+            ELSE
+				UPDATE catalog_product_entity
+                   SET attribute_set_id = @attribute_set_id
+                 WHERE entity_id = @product_id;  
 			END IF;
             
             -- ADD DEFAULT DATA for visibility and status
@@ -333,7 +337,7 @@ outer_block:BEGIN
             
             -- status
             SET @statusExists = 0;
-            SELECT 1 INTO @statusExists FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name LIKE 'status|0' LIMIT 1;
+            SELECT 1 INTO @statusExists FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name LIKE 'status%' LIMIT 1;
             
             IF @statusExists = 0 THEN
 				INSERT INTO to_magento_datas (record_id, field_name, field_value) VALUES (NEW.record_id, 'status|0', 2);
