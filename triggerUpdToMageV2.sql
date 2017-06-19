@@ -489,6 +489,44 @@ outer_block:BEGIN
             SET NEW.message = 'END PRODUCT IMPORT';
             
 		END IF;
+        
+        
+        -- -------------------------------------------------------------- --
+        -- -------------------- STOCK PART START ------------------------ --
+        IF new.type = 3 THEN
+			SET NEW.message = 'update product - start';
+            
+            SET @sku = NEW.identifier;
+            
+            SET @product_id = (SELECT entity_id FROM catalog_product_entity WHERE sku = @sku);
+            
+            SET @qty = (SELECT field_value FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'qty');
+            
+            -- check if sku is set
+            IF @sku = '' THEN
+				SET NEW.message = 'Sku field not set';
+                SET NEW.status = 3;
+				LEAVE outer_block;
+			END IF;
+            
+            IF !@product_id OR @product_id IS NULL OR @product_id = '' THEN 
+				SET NEW.message = 'No matching product for sku found';
+                SET NEW.status = 3;
+				LEAVE outer_block;
+            END IF;
+            
+            UPDATE cataloginventory_stock_item
+               SET `qty` = @qty,
+				   `is_in_stock` = IF(@qty > 0,1,0)
+             WHERE product_id = @product_id;
+             
+            CALL mmc_reindexStockAllWeb(@product_id);
+            
+            SET NEW.message = 'END STOCK IMPORT';
+        END IF;
+        
+        -- -------------------- STOCK PART END -------------------------- --
+        -- -------------------------------------------------------------- --
 		
 	END IF;
 END outer_block

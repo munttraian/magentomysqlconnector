@@ -14,6 +14,30 @@ BEGIN
       FROM cataloginventory_stock_item i
      WHERE i.product_id =  p_productId;
 END //
+    
+-- reinde stock for all websites product is associated    
+DROP PROCEDURE IF EXISTS mmc_reindexStockAllWeb //
+CREATE PROCEDURE mmc_reindexStockAllWeb ( p_productId INT )
+BEGIN
+
+	SET @statusAttributeId = (SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'status' and entity_type_id = 4);
+
+	INSERT INTO cataloginventory_stock_status (product_id, website_id, stock_id, qty, stock_status)
+    SELECT `e`.`entity_id`, `cw`.`website_id`, `cis`.`stock_id`, IF(cisi.qty > 0, cisi.qty, 0) AS `qty`, IF(cisi.use_config_manage_stock = 0 AND cisi.manage_stock = 0, 1, IF(cisi.backorders = 30, 1, cisi.is_in_stock)) AS `status` FROM `catalog_product_entity` AS `e`
+	 CROSS JOIN `core_website` AS `cw`
+	 INNER JOIN `core_store_group` AS `csg` ON csg.group_id = cw.default_group_id
+	 INNER JOIN `core_store` AS `cs` ON cs.store_id = csg.default_store_id
+	 INNER JOIN `catalog_product_website` AS `pw` ON pw.product_id = e.entity_id AND pw.website_id = cw.website_id
+	 CROSS JOIN `cataloginventory_stock` AS `cis`
+	 LEFT JOIN `cataloginventory_stock_item` AS `cisi` ON cisi.stock_id = cis.stock_id AND cisi.product_id = e.entity_id
+	 INNER JOIN `catalog_product_entity_int` AS `tad_status` ON tad_status.entity_id = e.entity_id AND tad_status.attribute_id = @statusAttributeId AND tad_status.store_id = 0
+	 LEFT JOIN `catalog_product_entity_int` AS `tas_status` ON tas_status.entity_id = e.entity_id AND tas_status.attribute_id = @statusAttributeId AND tas_status.store_id = cs.store_id 
+	 WHERE (cw.website_id != 0) 
+       AND (e.type_id = 'simple') 
+       AND (IF(IFNULL(tas_status.value_id, -1) > 0, tas_status.value, tad_status.value)=1) 
+       AND (e.entity_id IN(p_productId))
+    ON DUPLICATE KEY UPDATE `qty` = VALUES(`qty`), stock_status = VALUES(`stock_status`);
+END //
 
 -- reindex price
 
