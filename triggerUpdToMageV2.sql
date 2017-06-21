@@ -502,6 +502,8 @@ outer_block:BEGIN
             
             SET @qty = (SELECT field_value FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'qty');
             
+            SET @statusAttributeId = (SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'status' and entity_type_id = 4);
+            
             -- check if sku is set
             IF @sku = '' THEN
 				SET NEW.message = 'Sku field not set';
@@ -510,17 +512,28 @@ outer_block:BEGIN
 			END IF;
             
             IF !@product_id OR @product_id IS NULL OR @product_id = '' THEN 
-				SET NEW.message = 'No matching product for sku found';
+				SET NEW.message = 'No matching product found for sku';
                 SET NEW.status = 3;
 				LEAVE outer_block;
             END IF;
             
-            UPDATE cataloginventory_stock_item
-               SET `qty` = @qty,
-				   `is_in_stock` = IF(@qty > 0,1,0)
-             WHERE product_id = @product_id;
+            -- stock availability is 1 if product is enabled
+            INSERT INTO cataloginventory_stock_item (product_id, stock_id, qty, is_in_stock)
+		    -- SELECT `e`.`entity_id`, 1, @qty, IF(MAX(`tad_status`.value)=1,1,0) as `is_in_stock`
+            SELECT `e`.`entity_id`, 1, @qty, 1 as `is_in_stock`
+              FROM `catalog_product_entity` AS `e`
+              INNER JOIN `catalog_product_entity_int` AS `tad_status` ON tad_status.entity_id = e.entity_id AND tad_status.attribute_id = @statusAttributeId 
+			 WHERE `e`.`entity_id` = @product_id
+             GROUP BY `e`.`entity_id`
+            ON DUPLICATE KEY UPDATE `qty` = VALUES(`qty`), `is_in_stock` = VALUES(`is_in_stock`);
+            
+            -- UPDATE cataloginventory_stock_item
+            --    SET `qty` = @qty,
+			-- 	   `is_in_stock` = 1
+            --  WHERE product_id = @product_id;
              
             CALL mmc_reindexStockAllWeb(@product_id);
+            CALL mmc_reindexProductPrice(@product_id);
             
             SET NEW.message = 'END STOCK IMPORT';
         END IF;

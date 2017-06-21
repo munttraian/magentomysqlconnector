@@ -23,7 +23,14 @@ BEGIN
 	SET @statusAttributeId = (SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'status' and entity_type_id = 4);
 
 	INSERT INTO cataloginventory_stock_status (product_id, website_id, stock_id, qty, stock_status)
-    SELECT `e`.`entity_id`, `cw`.`website_id`, `cis`.`stock_id`, IF(cisi.qty > 0, cisi.qty, 0) AS `qty`, IF(cisi.use_config_manage_stock = 0 AND cisi.manage_stock = 0, 1, IF(cisi.backorders = 30, 1, cisi.is_in_stock)) AS `status` FROM `catalog_product_entity` AS `e`
+    SELECT `e`.`entity_id`, 
+			`cw`.`website_id`, 
+            `cis`.`stock_id`, 
+            IF(cisi.qty > 0, cisi.qty, 0) AS `qty`, 
+            -- IF(cisi.use_config_manage_stock = 0 AND cisi.manage_stock = 0, 1, IF(cisi.backorders = 30, 1, cisi.is_in_stock)) AS `status` 
+            -- IF(IF(IFNULL(tas_status.value_id, -1) > 0, tas_status.value, tad_status.value)=1, 1, 0) as `status` -- stock_status is available if product is enabled
+            `cisi`.`is_in_stock` as `status`
+      FROM `catalog_product_entity` AS `e`
 	 CROSS JOIN `core_website` AS `cw`
 	 INNER JOIN `core_store_group` AS `csg` ON csg.group_id = cw.default_group_id
 	 INNER JOIN `core_store` AS `cs` ON cs.store_id = csg.default_store_id
