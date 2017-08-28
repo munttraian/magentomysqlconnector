@@ -29,7 +29,7 @@ END //
 
 -- log message in table
 DROP PROCEDURE IF EXISTS logMessage //
-CREATE PROCEDURE logMessage ( IN message TEXT ) modifies sql data
+CREATE PROCEDURE logMessage ( IN message TEXT ) 
 BEGIN
 	INSERT INTO `bizcloud_magento_log` (`text`) VALUES (message);
 END //
@@ -97,6 +97,70 @@ BEGIN
       FROM core_website w
      WHERE FIND_IN_SET(w.website_id, p_websiteIds); 
     
+END //
+
+-- check if customer address exists
+DROP FUNCTION IF EXISTS checkCustomerAddress //
+CREATE FUNCTION checkCustomerAddress ( p_recordId int, p_addressType VARCHAR(255)) RETURNS INT
+BEGIN
+    DECLARE v_return INT;
+    DECLARE v_address TEXT;
+    DECLARE v_entity_id INT(10);
+    DECLARE v_entity_type_id INT;
+    
+    SET v_entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'customer_address');
+    
+    SET v_return = 0;
+    SET v_entity_id = 0;
+    
+    SET sql_mode = '';
+
+	SET @addressConcat = (
+		SELECT group_concat(field_value order by eav.attribute_id ASC SEPARATOR ',')
+		  FROM to_magento_datas tmd
+          JOIN eav_attribute eav ON REPLACE(tmd.field_name,p_addressType,'') = eav.attribute_code
+         WHERE tmd.record_id = p_recordId
+           AND REPLACE(tmd.field_name,p_addressType,'') IN ('firstname', 'lastname')
+           AND eav.entity_type_id = v_entity_type_id
+           AND (INSTR(tmd.field_name, 'addr_bll') = 1 OR INSTR(tmd.field_name, 'addr_dlv') = 1)
+        GROUP BY tmd.record_id
+        ORDER BY attribute_id ASC
+		);
+        
+    CALL logMessage(CONCAT('Address checked ', @addressConcat));    
+
+	SELECT t.entity_id, group_concat(t.value order by t.attribute_id ASC SEPARATOR ',')
+      INTO v_entity_id, v_address
+      FROM (
+			SELECT entity_id, attribute_id, value
+			  FROM customer_address_entity_int
+			UNION ALL 
+			SELECT entity_id, attribute_id, value 
+			  FROM customer_address_entity_varchar
+			UNION ALL
+			SELECT entity_id, attribute_id, value
+			  FROM customer_address_entity_text
+			UNION ALL
+			SELECT entity_id, attribute_id, value
+			  FROM customer_address_entity_decimal
+			UNION ALL
+			SELECT entity_id, attribute_id, value
+			  FROM customer_address_entity_datetime
+			) t
+     WHERE t.attribute_id 
+			IN (SELECT attribute_id 
+				  FROM eav_attribute 
+                 WHERE entity_type_id = v_entity_type_id 
+                   AND attribute_code IN ('firstname', 'lastname')
+				)
+    GROUP BY t.entity_id
+    HAVING group_concat(t.value order by t.attribute_id ASC SEPARATOR ',') = @addressConcat
+    LIMIT 1;
+    
+    CALL logMessage(CONCAT('Address Id ', v_entity_id));    
+    
+    RETURN v_entity_id;
+
 END //
 
 DROP TRIGGER IF EXISTS triggerUpdToMage //
@@ -494,7 +558,7 @@ outer_block:BEGIN
         -- -------------------------------------------------------------- --
         -- -------------------- STOCK PART START ------------------------ --
         IF new.type = 3 THEN
-			SET NEW.message = 'update product - start';
+			SET NEW.message = 'update product stock - start';
             
             SET @sku = NEW.identifier;
             
@@ -517,10 +581,10 @@ outer_block:BEGIN
 				LEAVE outer_block;
             END IF;
             
-            -- stock availability is 1 if product is enabled
+            -- stock item
             INSERT INTO cataloginventory_stock_item (product_id, stock_id, qty, is_in_stock)
-		    -- SELECT `e`.`entity_id`, 1, @qty, IF(MAX(`tad_status`.value)=1,1,0) as `is_in_stock`
-            SELECT `e`.`entity_id`, 1, @qty, 1 as `is_in_stock`
+		    SELECT `e`.`entity_id`, 1, @qty, IF(MAX(`tad_status`.value)=1, IF(@qty > 0,1,0) ,0) as `is_in_stock`
+            -- SELECT `e`.`entity_id`, 1, @qty, 1 as `is_in_stock`
               FROM `catalog_product_entity` AS `e`
               INNER JOIN `catalog_product_entity_int` AS `tad_status` ON tad_status.entity_id = e.entity_id AND tad_status.attribute_id = @statusAttributeId 
 			 WHERE `e`.`entity_id` = @product_id
@@ -529,7 +593,7 @@ outer_block:BEGIN
             
             -- UPDATE cataloginventory_stock_item
             --    SET `qty` = @qty,
-			-- 	   `is_in_stock` = 1
+			-- 	   `is_in_stock` = IF(@qty > 0,1,0)
             --  WHERE product_id = @product_id;
              
             CALL mmc_reindexStockAllWeb(@product_id);
@@ -541,6 +605,327 @@ outer_block:BEGIN
         -- -------------------- STOCK PART END -------------------------- --
         -- -------------------------------------------------------------- --
 		
+        
+        -- -------------------------------------------------------------- --
+        -- -------------------- PRICE PART START ------------------------ --
+        IF new.type = 4 THEN
+        
+			SET NEW.message = 'update product price - start';
+            
+            SET @sku = NEW.identifier;
+            
+            SET @product_id = (SELECT entity_id FROM catalog_product_entity WHERE sku = @sku);
+            
+            SET @priceAttributeId = (SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'price' and entity_type_id = 4);
+            
+            SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'catalog_product');
+            
+            -- check if sku is set
+            IF @sku = '' THEN
+				SET NEW.message = 'Sku field not set';
+                SET NEW.status = 3;
+				LEAVE outer_block;
+			END IF;
+            
+            IF !@product_id OR @product_id IS NULL OR @product_id = '' THEN 
+				SET NEW.message = 'No matching product found for sku';
+                SET NEW.status = 3;
+				LEAVE outer_block;
+            END IF;
+        
+            -- insert prices
+			INSERT INTO catalog_product_entity_decimal (entity_type_id, entity_id, attribute_id, store_id, value)
+            SELECT @entity_type_id, @product_id, @priceAttributeId, csg.default_store_id, tmd.field_value
+			  FROM to_magento_datas tmd,
+                   hd_pricegroup_website hpw,
+                   core_store_group csg
+             WHERE tmd.record_id = new.record_id
+               AND tmd.field_name = hpw.pricegroup
+               AND csg.website_id = hpw.website_id
+               AND hpw.special = 0
+            ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- insert default price
+            INSERT INTO catalog_product_entity_decimal (entity_type_id, entity_id, attribute_id, store_id, value)
+            SELECT @entity_type_id, @product_id, @priceAttributeId, 0, tmd.field_value
+			  FROM to_magento_datas tmd
+             WHERE tmd.record_id = new.record_id
+               AND tmd.field_name = 'Vejl_DKK'
+            ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+               
+			-- insert group prices
+            INSERT INTO catalog_product_entity_group_price 
+						(entity_id, 
+                         all_groups, 
+                         customer_group_id, 
+                         value, 
+                         website_id)
+			SELECT @product_id, 
+					0, 
+                    cg.customer_group_id,
+                    tmd.field_value,
+                    hpw.website_id
+			  FROM to_magento_datas tmd,
+                   hd_pricegroup_website hpw,
+                   customer_group cg
+             WHERE tmd.record_id = new.record_id
+               AND tmd.field_name = hpw.pricegroup
+               AND cg.customer_group_code = tmd.field_name
+               AND hpw.special = 1
+            ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- call reindex
+            CALL mmc_reindexProductPrice(@product_id);
+            
+            SET NEW.message = 'END PRICE IMPORT';
+        END IF;
+        -- -------------------- PRICE PART END -------------------------- --
+        -- -------------------------------------------------------------- --
+        
+        -- -------------------------------------------------------------- --
+        -- ----------------- CUSTOMER PART START ------------------------ --
+        IF new.type = 5 THEN
+			CALL logMessage('START CUSTOMER');
+        
+			SET @customerEmail = NEW.identifier;
+            
+            SET @action = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'action' );
+			SET @websiteId = (SELECT IFNULL(field_value,'') FROM to_magento_datas WHERE record_id = NEW.record_id AND field_name = 'website_id' );
+			
+            SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'customer');
+            
+            -- check if customer email is set
+            IF @customerEmail = '' THEN
+				SET NEW.message = 'Customer email not set';
+                SET NEW.status = 3;
+				LEAVE outer_block;
+			END IF;
+            
+            -- get customer id
+            SET @customer_id = (SELECT entity_id FROM customer_entity WHERE email = @customerEmail AND website_id = @websiteId);
+            
+            IF !@customer_id OR @customer_id IS NULL OR @customer_id = '' THEN
+				INSERT INTO customer_entity (`website_id`, `email`) VALUES (@websiteId, @customerEmail);
+                
+                SET @customer_id = LAST_INSERT_ID();
+            END IF;
+            
+            CALL logMessage(CONCAT('customer added ',@customer_id));
+            
+            -- update customer attributes
+            -- varchar
+            INSERT IGNORE INTO customer_entity_varchar (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    @customer_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'varchar'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- int
+            INSERT IGNORE INTO customer_entity_int (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    @customer_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'int'
+               AND field_value != ''
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- decimal
+            INSERT IGNORE INTO customer_entity_decimal (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    @customer_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'decimal'
+               AND td.field_value != ''
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- text
+            INSERT IGNORE INTO customer_entity_text (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    @customer_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'text'
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+                              
+            -- datetime
+            INSERT IGNORE INTO customer_entity_datetime (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    @customer_id as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF(INSTR(td.field_name,'|'), SUBSTRING_INDEX(td.field_name,'|', 1), td.field_name)
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'datetime'
+               AND td.field_value != ''
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- ---------------- --   
+            -- CUSTOMER ADDRESS --
+            
+            -- BILLING ADDRESS
+            SET @customer_addr_bll_id = checkCustomerAddress(NEW.record_id, 'addr_bll_');
+            SET @customer_addr_dlv_id = checkCustomerAddress(NEW.record_id, 'addr_dlv_');
+            
+            SET @entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'customer_address');            
+            
+            IF !@customer_addr_bll_id OR @customer_addr_bll_id IS NULL OR @customer_addr_bll_id = '' THEN
+				INSERT INTO customer_address_entity 
+					(`entity_type_id`, 
+                    `attribute_set_id`,
+                    `increment_id`,
+                    `parent_id`,
+                    `is_active`) 
+				VALUES (@entity_type_id, 
+						0,
+                        NULL,
+                        @customer_id,
+                        1);
+                
+                SET @customer_addr_bll_id = LAST_INSERT_ID();
+            END IF;
+            
+            IF !@customer_addr_dlv_id OR @customer_addr_dlv_id IS NULL OR @customer_addr_dlv_id = '' THEN
+				INSERT INTO customer_address_entity 
+					(`entity_type_id`, 
+                    `attribute_set_id`,
+                    `increment_id`,
+                    `parent_id`,
+                    `is_active`) 
+				VALUES (@entity_type_id, 
+						0,
+                        NULL,
+                        @customer_id,
+                        1);
+                
+                SET @customer_addr_dlv_id = LAST_INSERT_ID();
+            END IF;
+            
+            -- update customer address attributes
+            -- varchar
+            INSERT IGNORE INTO customer_address_entity_varchar (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF (INSTR(td.field_name, 'addr_bll') = 1, @customer_addr_bll_id, @customer_addr_dlv_id) as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF (INSTR(td.field_name, 'addr_bll') = 1, 
+											REPLACE(td.field_name, 'addr_bll_',''),
+                                            REPLACE(td.field_name, 'addr_dlv_','')
+                                        )    
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'varchar'
+               AND (INSTR(td.field_name, 'addr_bll') = 1 OR INSTR(td.field_name, 'addr_dlv') = 1)
+               AND td.field_value != ''
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- int
+            INSERT IGNORE INTO customer_address_entity_int (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF (INSTR(td.field_name, 'addr_bll') = 1, @customer_addr_bll_id, @customer_addr_dlv_id) as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF (INSTR(td.field_name, 'addr_bll') = 1, 
+											REPLACE(td.field_name, 'addr_bll_',''),
+                                            REPLACE(td.field_name, 'addr_dlv_','')
+                                        )
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'int'
+               AND (INSTR(td.field_name, 'addr_bll') = 1 OR INSTR(td.field_name, 'addr_dlv') = 1)
+               AND td.field_value != ''
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- decimal
+            INSERT IGNORE INTO customer_address_entity_decimal (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF (INSTR(td.field_name, 'addr_bll') = 1, @customer_addr_bll_id, @customer_addr_dlv_id) as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF (INSTR(td.field_name, 'addr_bll') = 1, 
+											REPLACE(td.field_name, 'addr_bll_',''),
+                                            REPLACE(td.field_name, 'addr_dlv_','')
+                                        )
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'decimal'
+               AND (INSTR(td.field_name, 'addr_bll') = 1 OR INSTR(td.field_name, 'addr_dlv') = 1)
+               AND td.field_value != ''
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+            -- text
+            INSERT IGNORE INTO customer_address_entity_text (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF (INSTR(td.field_name, 'addr_bll') = 1, @customer_addr_bll_id, @customer_addr_dlv_id) as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF (INSTR(td.field_name, 'addr_bll') = 1, 
+											REPLACE(td.field_name, 'addr_bll_',''),
+                                            REPLACE(td.field_name, 'addr_dlv_','')
+                                        )
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'text'
+               AND (INSTR(td.field_name, 'addr_bll') = 1 OR INSTR(td.field_name, 'addr_dlv') = 1)
+               AND td.field_value != ''
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+               
+            -- datetime
+            INSERT IGNORE INTO customer_address_entity_datetime (`entity_type_id`, `attribute_id`, `entity_id`, `value`)
+            SELECT @entity_type_id as entity_type_id, 
+					eav.attribute_id, 
+                    IF (INSTR(td.field_name, 'addr_bll') = 1, @customer_addr_bll_id, @customer_addr_dlv_id) as `entity_id`,
+                    field_value as `value`
+              FROM to_magento_datas td,
+                   eav_attribute eav
+             WHERE td.record_id = NEW.record_id
+               AND eav.attribute_code = IF (INSTR(td.field_name, 'addr_bll') = 1, 
+											REPLACE(td.field_name, 'addr_bll_',''),
+                                            REPLACE(td.field_name, 'addr_dlv_','')
+                                        )
+               AND eav.entity_type_id = @entity_type_id
+               AND eav.backend_type = 'datetime'
+               AND (INSTR(td.field_name, 'addr_bll') = 1 OR INSTR(td.field_name, 'addr_dlv') = 1)
+               AND td.field_value != ''
+               ON DUPLICATE KEY UPDATE `value` = VALUES(`value`);
+            
+        END IF;
+        -- ----------------- CUSTOMER PART END -------------------------- --
+        -- -------------------------------------------------------------- --
 	END IF;
 END outer_block
 //
